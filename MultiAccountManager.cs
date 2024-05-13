@@ -1,12 +1,17 @@
 ﻿using Dtwo.API.Hybride.Network.Messages;
 using Dtwo.API;
+using Dtwo.API.Inputs;
+using Dtwo.API.Inputs.Extensions;
+using System.Security.Principal;
+using System.Diagnostics;
+using System.Collections.Concurrent;
 
 namespace Dtwo.Plugins.MultiAccount
 {
 	public static class MultiAccountManager
 	{
-        public static IReadOnlyDictionary<string, MultiAccountController> Accounts => m_accounts;
-        private static Dictionary<string, MultiAccountController> m_accounts = new();
+        public static IReadOnlyDictionary<DofusWindow, MultiAccountController> Accounts => m_accounts;
+        private static Dictionary<DofusWindow, MultiAccountController> m_accounts = new();
         //public static Object AccountsLock { get; private set; } = new object();
 
         public static OptionsSettings Options { get; private set; }
@@ -21,7 +26,6 @@ namespace Dtwo.Plugins.MultiAccount
         public static MultiAccountController? Leader { get; private set; }
         public static MultiAccountController? SelectedAccount { get; private set; }
 
-
         public static bool IsStarted { get; private set; }
 
         public static bool IsOnMoveAll { get; private set; }
@@ -29,10 +33,7 @@ namespace Dtwo.Plugins.MultiAccount
 
         public static bool IsOnPreventInputs { get; private set; }
 
-
-        private static KeyListener m_keysListener;
-        private static WindowEventListener? m_windowEventListener;
-        private static List<DofusWindow>? m_queueSelectedCharacter = new();
+        private static ConcurrentQueue<DofusWindow> m_queueSelectedCharacter = new();
 
         public static Action OnAddAccount;
         public static Action OnRemoveAccount;
@@ -47,6 +48,11 @@ namespace Dtwo.Plugins.MultiAccount
             DofusWindow.OnDofusWindowStarted += OnDofusWindowStarted;
             DofusWindow.OnDofusWindowStoped += OnDofusWindowStoped;
         }
+
+        public static void UpdateOptions(OptionsSettings updatedOptions)
+        {
+            Options = updatedOptions;
+        }
         
 
         public static void Start(bool inviteMembers)
@@ -55,16 +61,11 @@ namespace Dtwo.Plugins.MultiAccount
             {
                 if (IsStarted)
                 {
-                    Stop();
+                    return;
                 }
 
-                IsStarted = true;
-
-                m_windowEventListener = new WindowEventListener();
-                m_windowEventListener.Listen(OnFocusWindow);
-                MultiClickListener.Start();
-
                 ListenKeys();
+                WindowsEventsListener.OnWindowFocused += OnWindowFocused;
 
                 if (inviteMembers)
                 {
@@ -72,6 +73,8 @@ namespace Dtwo.Plugins.MultiAccount
                 }
 
                 ReOrder();
+
+                IsStarted = true;
             }
             catch (Exception ex)
             {
@@ -83,11 +86,9 @@ namespace Dtwo.Plugins.MultiAccount
 
         private static void ListenKeys()
         {
-            List<API.InputKey> keys = new List<InputKey>();
-
             if (Options.Inputs.MultiClickKey != null && Options.Inputs.MultiClickKey.KeyId > 0)
             {
-                keys.Add(Options.Inputs.MultiClickKey);
+                MultiClickManager.Start();
             }
             else
             {
@@ -96,7 +97,7 @@ namespace Dtwo.Plugins.MultiAccount
 
             if (Options.Inputs.NextKey != null && Options.Inputs.NextKey.KeyId > 0)
             {
-                keys.Add(Options.Inputs.NextKey);
+                InputKeyListener.Instance.AddKey(Options.Inputs.NextKey.KeyId);
             }
             else
             {
@@ -105,7 +106,7 @@ namespace Dtwo.Plugins.MultiAccount
 
             if (Options.Inputs.PrevKey != null && Options.Inputs.PrevKey.KeyId > 0)
             {
-                keys.Add(Options.Inputs.PrevKey); ;
+                InputKeyListener.Instance.AddKey(Options.Inputs.PrevKey.KeyId);
             }
             else
             {
@@ -114,45 +115,38 @@ namespace Dtwo.Plugins.MultiAccount
 
             if (Options.Inputs.EnableMultiClickRight)
             {
-                keys.Add(new InputKey() { KeyId = 0x02, KeyString = "RightClick" });
+                InputKeyListener.Instance.AddKey(0x02);
             }
             else
             {
                 LogManager.LogWarning("Le multi clic droit n'est pas activé !", 1);
             }
 
-
-            var hwnds = GetHwnds();
-            m_keysListener = new KeyListener(hwnds);
-            m_keysListener.Listen(keys, OnKeyPressed);
-        }
-
-        private static void OnKeyPressed(API.InputKey key)
-        {
-            if (IsOnPreventInputs)
+            if (Options.Inputs.PassTurnKey != null && Options.Inputs.PassTurnKey.KeyId > 0)
             {
-                return;
+                InputKeyListener.Instance.AddKey(Options.Inputs.PassTurnKey.KeyId);
+            }
+            else
+            {
+                LogManager.LogWarning("La touche pour passer le tour n'a pas été définie !", 1);
             }
 
+            InputKeyListener.Instance.KeyUp += OnKeyPressed;
+        }
+
+        private static void OnKeyPressed(int keyId)
+        {
             try
             {
-                if (key == Options.Inputs.MultiClickKey)
-                {
-                    MultiClickListener.OnMultiClick();
-                }
-                else if (key.KeyId == 0x02) // right click
-                {
-                    MultiClickListener.OnRightClick();
-                }
-                else if (key == Options.Inputs.PrevKey)
+                if (keyId == Options.Inputs.PrevKey.KeyId)
                 {
                     SelectPrevWindow();
                 }
-                else if (key == Options.Inputs.NextKey)
+                else if (keyId == Options.Inputs.NextKey.KeyId)
                 {
                     SelectNextWindow();
                 }
-                else if (key == Options.Inputs.PassTurnKey && IsFighting)
+                else if (keyId == Options.Inputs.PassTurnKey.KeyId && IsFighting)
                 {
                     SelectNextLeaving();
                 }
@@ -169,13 +163,32 @@ namespace Dtwo.Plugins.MultiAccount
             {
                 IsStarted = false;
 
-                MultiClickListener.Stop();
-                m_windowEventListener?.Stop();
-                m_windowEventListener = null;
+                if (Options.Inputs.MultiClickKey.KeyId > 0)
+                {
+                    MultiClickManager.Stop();
+                }
+                
+                if (Options.Inputs.NextKey.KeyId > 0)
+                {
+                    InputKeyListener.Instance.RemoveKey(Options.Inputs.NextKey.KeyId);
+                }
 
-                m_keysListener?.Stop();
-                m_keysListener?.Dispose();
-                m_keysListener = null;
+                if (Options.Inputs.PrevKey.KeyId > 0)
+                {
+                    InputKeyListener.Instance.RemoveKey(Options.Inputs.PrevKey.KeyId);
+                }
+
+                if (Options.Inputs.PassTurnKey.KeyId > 0)
+                {
+                    InputKeyListener.Instance.RemoveKey(Options.Inputs.PassTurnKey.KeyId);
+                }
+
+                if (Options.Inputs.EnableMultiClickRight)
+                {
+                    InputKeyListener.Instance.RemoveKey(0x02);
+                }
+
+                WindowsEventsListener.OnWindowFocused -= OnWindowFocused;
 
                 m_queueSelectedCharacter = new();
                 m_accounts = new();
@@ -193,17 +206,6 @@ namespace Dtwo.Plugins.MultiAccount
                 LogManager.LogError(
                             $"{nameof(MultiAccountManager)}.{nameof(Stop)}", 
                             "error on stop : " + ex.ToString());
-            }
-        }
-
-        public static void PreventInput(bool b)
-        {
-            if (IsOnPreventInputs == b)
-            {
-                LogManager.LogWarning(
-                            $"{nameof(MultiAccountManager)}.{nameof(PreventInput)}", 
-                            $"Prevent input already {b}");
-                return;
             }
         }
 
@@ -227,7 +229,13 @@ namespace Dtwo.Plugins.MultiAccount
         // Todo : global ?
         private static void OnDofusWindowStarted(DofusWindow dofusWindow)
         {
-            m_queueSelectedCharacter?.Add(dofusWindow);
+            if (dofusWindow == null)
+            {
+                Debug.WriteLine("DofusWindow is null");
+                //error
+            }
+
+            m_queueSelectedCharacter.Enqueue(dofusWindow);
         }
 
         private static void OnDofusWindowStoped(DofusWindow dofusWindow)
@@ -240,21 +248,20 @@ namespace Dtwo.Plugins.MultiAccount
         // todo : global ?
         private static void SelectCharacterUpdate()
         {
-            Task.Factory.StartNew(() =>
+            Task.Factory.StartNew(async () =>
             {
                 while (true)
                 {
-                    if (m_queueSelectedCharacter?.Count == 0) continue;
+                    if (m_queueSelectedCharacter.TryDequeue(out var window) == false)
+                    {
+                        continue;
+                    }
 
-                    var window = m_queueSelectedCharacter[0];
-
-                    Thread.Sleep(API.Random.Range(Options.Delays.DelayCharacterSelectionMin, Options.Delays.DelayCharacterSelectionMax));
-                    InputEvents.InputManager.KeyboardKeyUpAndDown(window, 0x0D, 50).Wait();
-
-                    m_queueSelectedCharacter.RemoveAt(0);
+                    await Task.Delay(API.Random.Range(Options.Delays.DelayCharacterSelectionMin, Options.Delays.DelayCharacterSelectionMax));
+                    await window.SendKey(0x0D);
                 }
 
-            }, TaskCreationOptions.LongRunning);
+            });
         }
 
         public static void AddWindow(DofusWindow dofusWindow)
@@ -270,7 +277,7 @@ namespace Dtwo.Plugins.MultiAccount
                 Leader = controller;
 			}
 
-            m_accounts.Add(dofusWindow.Character.Name, controller);
+            m_accounts.Add(dofusWindow, controller);
             OnAddAccount?.Invoke();
         }
 
@@ -284,7 +291,7 @@ namespace Dtwo.Plugins.MultiAccount
 
         public static void RemoveController(MultiAccountController controller)
         {
-            m_accounts.Remove(controller.DofusWindow.Character.Name);
+            m_accounts.Remove(controller.DofusWindow);
 
             if (IsStarted)
             {
@@ -298,15 +305,25 @@ namespace Dtwo.Plugins.MultiAccount
         // Sended to member joined
         public static void OnPartyJoin(DofusWindow dofusWindow, PartyJoinMessage message)
         {
-            bool isOwner = message.Members.Length == 1;
-            //var member = message.members.FirstOrDefault(x => x.name == Name);
-
             foreach (var member in message.Members)
-			{
-                if (Accounts.ContainsKey(member.name) == false) continue;
+            {
+                // Todo : use a dictionary with a name as key
+                // find the account with the same name
+                foreach (var account in Accounts)
+                {
+                    if (account.Value.DofusWindow.Character == null)
+                    {
+                        // error;
+                        continue;
+                    }
 
-                Accounts[member.name].UpdateInitiative((int)member.initiative);
-			}
+                    if (account.Value.DofusWindow.Character.Name != member.name)
+                        continue;
+
+                    account.Value.UpdateInitiative((int)member.initiative);
+                    break;
+                }
+            }
 
             ReOrder();
         }
@@ -324,15 +341,27 @@ namespace Dtwo.Plugins.MultiAccount
                     return;
 				}
 
-                if (Accounts.ContainsKey(message.MemberInformations.name) == false)
+                // Find the account with the same name
+                foreach (var account in Accounts)
                 {
-                    return;
+                    if (account.Value.DofusWindow.Character == null)
+                    {
+                        // error;
+                        continue;
+                    }
+
+                    if (account.Value.DofusWindow.Character.Name != message.MemberInformations.name)
+                        continue;
+
+                    // Update initiative
+                    account.Value.UpdateInitiative((int)message.MemberInformations.initiative);
+
+                    ReOrder();
+
+                    break;
                 }
 
-                MultiAccountController controller = Accounts[message.MemberInformations.name];
-                controller.UpdateInitiative((int)message.MemberInformations.initiative);
-
-                ReOrder();
+                
             }
         }
 
@@ -362,6 +391,12 @@ namespace Dtwo.Plugins.MultiAccount
                 for (int i = 0; i < Accounts.Count; i++)
                 {
                     var account = Accounts.ElementAt(i).Value;
+                    if (account.DofusWindow.Character == null)
+                    {
+                        // error;
+                        continue;
+                    }
+
                     if (account.DofusWindow.Character.Id != message.Id) continue;
 
                     CharacterPreferences prefs = GetCharacterPreferences(account);
@@ -466,6 +501,8 @@ namespace Dtwo.Plugins.MultiAccount
 
         public static void SelectWindow(MultiAccountController account)
 		{
+            Debug.WriteLine("Select window");
+
             SelectedAccount = account;
             PInvoke.FocusProcess(account.DofusWindow.WindowProcess);
 
@@ -474,18 +511,29 @@ namespace Dtwo.Plugins.MultiAccount
 
         private static void InviteMembers()
         {
+            if (Leader == null)
+            {
+                // error
+                return;
+            }
+
             Task.Factory.StartNew(() =>
             {
                 try
                 {
                     // Click to chat (send space)
-                    InputEvents.InputManager.KeyboardKeyUpAndDown(Leader?.DofusWindow, 0x20, 1).Wait(); // space
+                    Leader.DofusWindow.SendKey(0x20, 1).Wait(); // space
                     Thread.Sleep(1500);
 
                     // Send /invite .... to chat for each accounts
                     for (int i = 0; i < Accounts.Count; i++)
                     {
                         var account = Accounts.ElementAt(i).Value;
+                        if (account.DofusWindow.Character == null)
+                        {
+                            // error
+                            continue;
+                        }
 
                         if (account == Leader) continue;
 
@@ -504,60 +552,67 @@ namespace Dtwo.Plugins.MultiAccount
 
         private static void SendInvite(DofusWindow window, string playerName)
         {
+            if (Leader == null)
+            {
+                // error
+                return;
+            }
+
             playerName = "/invite " + playerName;
-            InputEvents.InputManager.KeyboardKeyUpAndDown(Leader.DofusWindow, 0x08, 500).Wait(); // backspace
+
+            Leader.DofusWindow.SendKey(0x0D, 500).Wait(); // enter
 
             // send inputs character
             for (int i = 0; i < playerName.Length; i++)
             {
-                //InputEvents.InputManager.KeyboardKeyDown(window, playerName[i]);
-                //InputEvents.InputManager.KeyboardKeyUp(window, playerName[i]);
-
-                InputEvents.InputManager.KeyboardKey(window, playerName[i]);
-
+                window.SendChar(playerName[i]);
                 Thread.Sleep(API.Random.Range(Options.Delays.DelayChatCharacterMin, Options.Delays.DelayChatCharacterMax));
             }
 
             Thread.Sleep(API.Random.Range(25, 50));
 
             // send enter
-            InputEvents.InputManager.KeyboardKeyUpAndDown(window, 0x0D, 1).Wait(); // enter
+            window.SendKey(0x0D, 1).Wait();
         }
 
-        private static void OnFocusWindow(IntPtr hwnd)
+        private static void OnWindowFocused(IntPtr hwnd)
         {
             if (Accounts == null) return;
 
-            //lock (AccountsLock)
-            //{
-                for (int i = 0; i < Accounts.Count; i++)
-                {
-                    var account = Accounts.ElementAt(i);
+            DofusWindow? dofusWindow = SystemWindowInfos.FocusedDofusWindow;
+            if (dofusWindow == null)
+                return;
 
-                    if (account.Value.DofusWindow.WindowProcess.MainWindowHandle == hwnd)
-                    {
-                        SelectedAccount = account.Value;
-                        OnSelect?.Invoke();
-
-                        //DofusWindow.SelectDofusWindow(account.Value.DofusWindow);
-                        return;
-                    }
-                }
-            //}
+            MultiAccountController? controller = null;
+            if (m_accounts.TryGetValue(dofusWindow, out controller))
+            {
+                SelectedAccount = controller;
+                OnSelect?.Invoke();
+                //SelectWindow(controller);
+            }
         }
 
         public static void SelectNextWindow()
 		{
-            int index = IndexOfAccount(SelectedAccount);
-            if (index >= Accounts.Count - 1)
-			{
+            int index = 0;
+            if (SelectedAccount == null)
+            {
                 index = 0;
-			}
-			else
-			{
-                index++;
-			}
+            }
+            else
+            {
+                index = IndexOfAccount(SelectedAccount);
+                if (index >= Accounts.Count - 1)
+                {
+                    index = 0;
+                }
+                else
+                {
+                    index++;
+                }
+            }
 
+            Debug.WriteLine("SelectPrevWindow");
             SelectWindow(Accounts.ElementAt(index).Value);
 		}
 
@@ -573,6 +628,7 @@ namespace Dtwo.Plugins.MultiAccount
                 index --;
             }
 
+            Debug.WriteLine("SelectPrevWindow");
             SelectWindow(Accounts.ElementAt(index).Value);
         }
 
@@ -617,7 +673,7 @@ namespace Dtwo.Plugins.MultiAccount
 
         private static void SendPassTurn(MultiAccountController controller)
         {
-            InputEvents.InputManager.KeyboardKeyUpAndDown(controller.DofusWindow, Options.Inputs.PassTurnKey.KeyId, 35).Wait();
+            controller.DofusWindow.SendKey(Options.Inputs.PassTurnKey.KeyId, 35).Wait();
         }
 
         public static void ForceReOrder(MultiAccountController controller, int newIndex)
@@ -642,7 +698,7 @@ namespace Dtwo.Plugins.MultiAccount
                 return;
             }
 
-            var newAccounts = new Dictionary<string, MultiAccountController>();
+            var newAccounts = new Dictionary<DofusWindow, MultiAccountController>();
             for (int i = 0; i < m_accounts.Count; i++)
             {
                 var account = m_accounts.ElementAt(i).Value;
@@ -655,12 +711,10 @@ namespace Dtwo.Plugins.MultiAccount
                     account = controller;
                 }
 
-                newAccounts.Add(account.DofusWindow.Character.Name, account);
+                newAccounts.Add(account.DofusWindow, account);
             }
 
             m_accounts = newAccounts;
-
-            //OnReOrdered?.Invoke();
         }
 
         public static void ReOrder()

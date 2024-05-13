@@ -19,5 +19,18 @@ namespace Dtwo.Plugins.MultiAccount
         public int DelayCharacterSelectionMin { get; set; } = 1000;
         [DataMember]
         public int DelayCharacterSelectionMax { get; set; } = 1500;
+
+        public OptionsDelays Clone()
+        {
+            return new OptionsDelays
+            {
+                DelayMultiClickMin = DelayMultiClickMin,
+                DelayMultiClickMax = DelayMultiClickMax,
+                DelayChatCharacterMin = DelayChatCharacterMin,
+                DelayChatCharacterMax = DelayChatCharacterMax,
+                DelayCharacterSelectionMin = DelayCharacterSelectionMin,
+                DelayCharacterSelectionMax = DelayCharacterSelectionMax
+            };
+        }
     }
 }

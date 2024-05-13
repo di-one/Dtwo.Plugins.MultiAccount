@@ -9,7 +9,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\..\..\Documents\Dtwo_Git\Dtwo.API.Hybride\Dtwo.API.Hybride.csproj" />
     <ProjectReference Include="..\..\..\..\Documents\Dtwo_Git\Dtwo.API\Dtwo.API.csproj" />
-    <ProjectReference Include="..\..\..\..\Documents\Dtwo_Git\Dtwo.Plugins.InputEvents\Dtwo.Plugins.InputEvents.csproj" />
+    <ProjectReference Include="..\Dtwo.API.Inputs\Dtwo.API.Inputs.csproj" />
   </ItemGroup>
 
 </Project>

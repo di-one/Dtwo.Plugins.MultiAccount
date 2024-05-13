@@ -18,5 +18,17 @@ namespace Dtwo.Plugins.MultiAccount
 
         [DataMember]
         public bool EnableMultiClickRight { get; set; } = true;
+
+        public OptionsInputs Clone()
+        {
+            return new OptionsInputs
+            {
+                PassTurnKey = PassTurnKey.Clone(),
+                MultiClickKey = MultiClickKey.Clone(),
+                NextKey = NextKey.Clone(),
+                PrevKey = PrevKey.Clone(),
+                EnableMultiClickRight = EnableMultiClickRight
+            };
+        }
     }
 }

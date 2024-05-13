@@ -20,5 +20,17 @@ namespace Dtwo.Plugins.MultiAccount
 
         [DataMember]
         public bool AutoUpdateInitiative { get; set; } = true;
+
+        public OptionsSettings Clone()
+        {
+            return new OptionsSettings
+            {
+                Inputs = Inputs.Clone(),
+                Delays = Delays.Clone(),
+                AutoSelectTurn = AutoSelectTurn,
+                AutoSelectTurn_PassDeath = AutoSelectTurn_PassDeath,
+                AutoUpdateInitiative = AutoUpdateInitiative
+            };
+        }
     }
 }
